@@ -93,8 +93,16 @@ public class ChatConnection {
         if (!text.contains("://")) {
             text = "wss://" + text;
         }
+        if (text.startsWith("https://")) {
+            text = "wss://" + text.substring(8);
+        } else if (text.startsWith("http://")) {
+            text = "ws://" + text.substring(7);
+        }
         try {
             URI uri = URI.create(text);
+            if (uri.getPath() == null || uri.getPath().isEmpty()) {
+                uri = URI.create(text + "/");
+            }
             if (uri.getHost() == null || !(uri.getScheme().equals("ws") || uri.getScheme().equals("wss"))) {
                 throw new IOException("The server URL must look like wss://your-app.onrender.com");
             }
