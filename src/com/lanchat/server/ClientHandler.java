@@ -13,12 +13,13 @@ import com.lanchat.common.User;
 import com.lanchat.db.DataAccessException;
 import com.lanchat.db.MessageDAO;
 import com.lanchat.db.UserDAO;
+import com.lanchat.net.WsStreams;
 
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.ObjectInputFilter;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.net.Socket;
 import java.net.SocketException;
 import java.util.List;
 import java.util.Optional;
@@ -34,7 +35,7 @@ public class ClientHandler implements Runnable {
     private static final int SEARCH_LIMIT = 30;
     private static final String DEFAULT_ROOM = "general";
 
-    private final Socket socket;
+    private final WsStreams socket;   // the WebSocket, seen as plain input/output streams
     private final ChatServer server;
     private final UserDAO userDao = new UserDAO();
     private final MessageDAO messageDao = new MessageDAO();
@@ -46,7 +47,7 @@ public class ClientHandler implements Runnable {
     private volatile String username;
     private volatile String room = DEFAULT_ROOM;    // the room this user is currently in
 
-    ClientHandler(Socket socket, ChatServer server) {
+    ClientHandler(WsStreams socket, ChatServer server) {
         this.socket = socket;
         this.server = server;
     }
@@ -62,6 +63,8 @@ public class ClientHandler implements Runnable {
             out = new ObjectOutputStream(socket.getOutputStream());
             out.flush();
             in = new ObjectInputStream(socket.getInputStream());
+            // Only accept the chat's own message classes: stops a public client from sending malicious objects.
+            in.setObjectInputFilter(ObjectInputFilter.Config.createFilter(WsStreams.ALLOWED_CLASSES));
 
             if (authenticate()) {
                 listen();
@@ -128,7 +131,7 @@ public class ClientHandler implements Runnable {
         Optional<User> found = userDao.authenticate(name, password);
         if (found.isEmpty()) {
             // Same message for "no such user" and "wrong password" so nobody can probe for usernames.
-            server.log("Failed login for '" + name + "' from " + socket.getRemoteSocketAddress());
+            server.log("Failed login for '" + name + "' from " + socket.getRemoteAddress());
             send(system(MessageType.ERROR, "Invalid username or password."));
             return false;
         }
@@ -512,11 +515,7 @@ public class ClientHandler implements Runnable {
     }
 
     void close() {
-        try {
-            socket.close();
-        } catch (IOException ignored) {
-            // already closed
-        }
+        socket.close();
     }
 
     private void disconnect() {
@@ -532,7 +531,7 @@ public class ClientHandler implements Runnable {
     }
 
     private String describe() {
-        return username != null ? username : String.valueOf(socket.getRemoteSocketAddress());
+        return username != null ? username : socket.getRemoteAddress();
     }
 
     private static TextMessage system(MessageType type, String text) {

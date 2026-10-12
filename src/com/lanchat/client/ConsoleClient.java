@@ -4,44 +4,45 @@ import com.lanchat.common.Message;
 import com.lanchat.common.MessageType;
 import com.lanchat.common.TextMessage;
 
-import java.io.EOFException;
 import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.net.Socket;
-import java.net.SocketException;
 import java.util.Scanner;
 
 /**
- * Temporary text client used to test the server before the Swing UI exists (Phase 6).
- * Usage: ConsoleClient [host] [port]
+ * Text client used to test the server without the Swing UI.
+ * Usage: ConsoleClient [server-url]      e.g. ConsoleClient wss://your-app.onrender.com
+ * (default: ws://localhost:5000)
  */
 public class ConsoleClient {
 
     public static void main(String[] args) {
-        String host = args.length > 0 ? args[0] : "localhost";
-        int port = args.length > 1 ? Integer.parseInt(args[1]) : 5000;
+        String url = args.length > 0 ? args[0] : "ws://localhost:5000";
         Scanner keyboard = new Scanner(System.in);
+        ChatConnection connection = null;
 
-        try (Socket socket = new Socket(host, port)) {
-            ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
-            out.flush();
-            ObjectInputStream in = new ObjectInputStream(socket.getInputStream());
+        try {
+            connection = new ChatConnection(url);
 
-            String username = authenticate(keyboard, out, in);
+            String username = authenticate(keyboard, connection);
             if (username == null) {
                 return;
             }
 
-            Thread reader = new Thread(() -> readLoop(in), "reader");
-            reader.setDaemon(true);
-            reader.start();
+            connection.startListening(new ChatConnection.Listener() {
+                @Override
+                public void onMessage(Message message) {
+                    System.out.println(message.display());
+                }
+
+                @Override
+                public void onDisconnect() {
+                    System.out.println("Disconnected from server.");
+                }
+            });
 
             while (keyboard.hasNextLine()) {
                 String line = keyboard.nextLine().trim();
                 if (line.equalsIgnoreCase("/quit")) {
-                    out.writeObject(new TextMessage(MessageType.LOGOUT, username, null, ""));
-                    out.flush();
+                    connection.send(new TextMessage(MessageType.LOGOUT, username, null, ""));
                     break;
                 }
                 if (line.isEmpty()) {
@@ -49,20 +50,20 @@ public class ConsoleClient {
                 }
                 Message message = CommandParser.parse(username, line, System.out::println);
                 if (message != null) {
-                    out.writeObject(message);
-                    out.flush();
-                    out.reset();
+                    connection.send(message);
                 }
             }
-        } catch (EOFException e) {
-            System.out.println("The server closed the connection.");
         } catch (IOException | ClassNotFoundException e) {
             System.out.println("Connection problem: " + e.getMessage());
+        } finally {
+            if (connection != null) {
+                connection.close();
+            }
         }
     }
 
     /** Asks for login or register until login succeeds. @return the username, or null if the user exits */
-    private static String authenticate(Scanner keyboard, ObjectOutputStream out, ObjectInputStream in)
+    private static String authenticate(Scanner keyboard, ChatConnection connection)
             throws IOException, ClassNotFoundException {
         while (true) {
             System.out.print("1) Login   2) Register   3) Exit > ");
@@ -79,30 +80,13 @@ public class ConsoleClient {
             String pass = keyboard.nextLine();
 
             MessageType type = choice.equals("1") ? MessageType.LOGIN : MessageType.REGISTER;
-            out.writeObject(new TextMessage(type, user, null, pass));
-            out.flush();
-            out.reset();
+            connection.send(new TextMessage(type, user, null, pass));
 
-            Message reply = (Message) in.readObject();
+            Message reply = connection.readOne();
             System.out.println(reply.display());
             if (type == MessageType.LOGIN && reply.getType() == MessageType.OK) {
                 return user;
             }
-        }
-    }
-
-    private static void readLoop(ObjectInputStream in) {
-        try {
-            while (true) {
-                Object obj = in.readObject();
-                if (obj instanceof Message) {
-                    System.out.println(((Message) obj).display());
-                }
-            }
-        } catch (EOFException | SocketException e) {
-            System.out.println("Disconnected from server.");
-        } catch (IOException | ClassNotFoundException e) {
-            System.out.println("Read error: " + e.getMessage());
         }
     }
 }

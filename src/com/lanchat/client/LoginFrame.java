@@ -16,8 +16,7 @@ import java.util.concurrent.ExecutionException;
 /** Login / register window. On a successful login it opens the ChatFrame and hands over the connection. */
 public class LoginFrame extends JFrame {
 
-    private final RoundedTextField hostField = new RoundedTextField(14);
-    private final RoundedTextField portField = new RoundedTextField(5);
+    private final RoundedTextField urlField = new RoundedTextField(24);   // e.g. wss://your-app.onrender.com
     private final RoundedTextField userField = new RoundedTextField(20);
     private final RoundedPasswordField passField = new RoundedPasswordField(20);
     private final RoundedButton loginButton = RoundedButton.primary("Sign in");
@@ -43,8 +42,7 @@ public class LoginFrame extends JFrame {
     }
 
     private JPanel buildForm() {
-        hostField.setText("localhost");
-        portField.setText("5000");
+        urlField.setText("ws://localhost:5000");   // for a deployed server type e.g. wss://your-app.onrender.com
         userField.setPlaceholder("Your username");
         passField.setPlaceholder("Your password");
 
@@ -55,10 +53,9 @@ public class LoginFrame extends JFrame {
         subtitle.setFont(Theme.font(Font.PLAIN, 14f));
         subtitle.setForeground(Theme.TEXT_MUTED);
 
-        JPanel serverRow = new JPanel(new BorderLayout(10, 0));
+        JPanel serverRow = new JPanel(new BorderLayout());
         serverRow.setOpaque(false);
-        serverRow.add(hostField, BorderLayout.CENTER);
-        serverRow.add(portField, BorderLayout.EAST);
+        serverRow.add(urlField, BorderLayout.CENTER);
 
         JPanel buttons = new JPanel(new GridLayout(1, 2, 12, 0));
         buttons.setOpaque(false);
@@ -79,7 +76,7 @@ public class LoginFrame extends JFrame {
         addRow(form, userField, row++, 6);
         addRow(form, fieldLabel("PASSWORD"), row++, 14);
         addRow(form, passField, row++, 6);
-        addRow(form, fieldLabel("SERVER ADDRESS AND PORT"), row++, 14);
+        addRow(form, fieldLabel("SERVER URL"), row++, 14);
         addRow(form, serverRow, row++, 6);
         addRow(form, buttons, row++, 24);
         addRow(form, statusLabel, row, 12);
@@ -109,17 +106,11 @@ public class LoginFrame extends JFrame {
     }
 
     private void submit(MessageType type) {
-        final String host = hostField.getText().trim();
+        final String url = urlField.getText().trim();
         final String user = userField.getText().trim();
         final String pass = new String(passField.getPassword());
 
-        Integer parsedPort = parsePort();
-        if (parsedPort == null) {
-            setStatus("The port must be a number.", true);
-            return;
-        }
-        final int port = parsedPort;
-        if (host.isEmpty() || user.isEmpty() || pass.isEmpty()) {
+        if (url.isEmpty() || user.isEmpty() || pass.isEmpty()) {
             setStatus("Please enter the server, username and password.", true);
             return;
         }
@@ -130,7 +121,7 @@ public class LoginFrame extends JFrame {
             @Override
             protected Message doInBackground() throws Exception {
                 if (connection == null) {
-                    connection = new ChatConnection(host, port);
+                    connection = new ChatConnection(url);
                 }
                 connection.send(new TextMessage(type, user, null, pass));
                 return connection.readOne();
@@ -162,14 +153,6 @@ public class LoginFrame extends JFrame {
             setStatus(text, false);
         } else {
             setStatus(text, true);
-        }
-    }
-
-    private Integer parsePort() {
-        try {
-            return Integer.valueOf(portField.getText().trim());
-        } catch (NumberFormatException e) {
-            return null;
         }
     }
 

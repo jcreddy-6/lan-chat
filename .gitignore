@@ -1,0 +1,4 @@
+out/
+*.db
+hs_err_pid*.log
+sources.txt

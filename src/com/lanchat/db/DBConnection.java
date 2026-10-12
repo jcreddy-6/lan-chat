@@ -13,7 +13,8 @@ public class DBConnection {
 
     private static final DBConnection INSTANCE = new DBConnection();
 
-    private final String url = "jdbc:sqlite:lanchat.db";   // file is created in the folder you run from
+    // Local run: lanchat.db in the folder you run from. On Render set DB_PATH=/data/lanchat.db (persistent disk).
+    private final String url = "jdbc:sqlite:" + System.getenv().getOrDefault("DB_PATH", "lanchat.db");
 
     private DBConnection() { }
 

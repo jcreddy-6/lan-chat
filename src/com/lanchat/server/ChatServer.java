@@ -8,9 +8,13 @@ import com.lanchat.db.DBConnection;
 import com.lanchat.db.DataAccessException;
 import com.lanchat.db.UserDAO;
 
-import java.io.IOException;
-import java.net.ServerSocket;
-import java.net.Socket;
+import com.lanchat.net.WsStreams;
+import org.java_websocket.WebSocket;
+import org.java_websocket.handshake.ClientHandshake;
+import org.java_websocket.server.WebSocketServer;
+
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -22,12 +26,13 @@ import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 /**
- * The chat server. Accepts TCP connections and hands each client to a ClientHandler
- * running on a thread from the pool.
+ * The chat server. Accepts WebSocket connections and hands each client to a ClientHandler
+ * running on a thread from the pool. (WebSocket instead of raw TCP so it can run on Render.)
  */
 public class ChatServer {
 
-    public static final int PORT = 5000;
+    /** Render tells the app which port to use through the PORT environment variable. */
+    public static final int PORT = Integer.parseInt(System.getenv().getOrDefault("PORT", "5000"));
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     /** username -> handler. ConcurrentHashMap because many client threads touch it at once. */
@@ -35,25 +40,88 @@ public class ChatServer {
     private final ExecutorService pool = Executors.newCachedThreadPool();
 
     private volatile boolean running = true;
-    private ServerSocket serverSocket;
+    private WebSocketServer webSocketServer;
 
-    public void start() throws IOException, DataAccessException {
+    public void start() throws DataAccessException {
         DBConnection.getInstance().init();
         ensureAdminExists();
 
-        serverSocket = new ServerSocket(PORT);
-        log("Server started on port " + PORT + ". Waiting for clients...");
+        // 0.0.0.0 = listen on all network interfaces (required on Render)
+        webSocketServer = new Listener(new InetSocketAddress("0.0.0.0", PORT));
+        webSocketServer.setReuseAddr(true);
+        webSocketServer.setConnectionLostTimeout(30);   // ping every 30 s: keeps idle connections alive behind proxies
+        webSocketServer.start();                        // runs on its own thread; the JVM stays up while it runs
         Runtime.getRuntime().addShutdownHook(new Thread(this::stop));
+    }
 
-        while (running) {
-            try {
-                Socket socket = serverSocket.accept();
-                log("Connection from " + socket.getRemoteSocketAddress());
-                pool.execute(new ClientHandler(socket, this));
-            } catch (IOException e) {
-                if (running) {
-                    log("Accept failed: " + e.getMessage());
+    /** Receives WebSocket events and feeds them to a ClientHandler through WsStreams. */
+    private final class Listener extends WebSocketServer {
+
+        Listener(InetSocketAddress address) {
+            super(address);
+        }
+
+        @Override
+        public void onStart() {
+            log("Server started on port " + PORT + ". Waiting for clients...");
+        }
+
+        @Override
+        public void onOpen(WebSocket conn, ClientHandshake handshake) {
+            String remote = String.valueOf(conn.getRemoteSocketAddress());
+            log("Connection from " + remote);
+            WsStreams streams = new WsStreams(remote);
+            streams.attach(new WsStreams.Transport() {
+                @Override
+                public void sendBinary(byte[] data) throws java.io.IOException {
+                    try {
+                        conn.send(data);
+                    } catch (RuntimeException e) {   // e.g. WebsocketNotConnectedException
+                        throw new java.io.IOException("WebSocket send failed: " + e.getMessage(), e);
+                    }
                 }
+
+                @Override
+                public void close() {
+                    conn.close();
+                }
+            });
+            conn.setAttachment(streams);
+            pool.execute(new ClientHandler(streams, ChatServer.this));
+        }
+
+        @Override
+        public void onMessage(WebSocket conn, ByteBuffer message) {
+            WsStreams streams = conn.getAttachment();
+            if (streams != null) {
+                byte[] data = new byte[message.remaining()];
+                message.get(data);
+                streams.onData(data);
+            }
+        }
+
+        @Override
+        public void onMessage(WebSocket conn, String message) {
+            // this chat only uses binary frames; ignore text
+        }
+
+        @Override
+        public void onClose(WebSocket conn, int code, String reason, boolean remote) {
+            WsStreams streams = conn.getAttachment();
+            if (streams != null) {
+                streams.onClosed();
+            }
+        }
+
+        @Override
+        public void onError(WebSocket conn, Exception ex) {
+            if (conn == null) {   // the server itself failed (for example the port is already in use)
+                System.err.println("Could not start server on port " + PORT + ": " + ex.getMessage());
+                System.exit(1);
+            }
+            WsStreams streams = conn.getAttachment();
+            if (streams != null) {
+                streams.onClosed();
             }
         }
     }
@@ -63,19 +131,22 @@ public class ChatServer {
         UserDAO users = new UserDAO();
         boolean hasAdmin = users.findAll().stream().anyMatch(u -> u.getRole() == Role.ADMIN);
         if (!hasAdmin) {
-            users.register("admin", "admin123", Role.ADMIN);
-            log("No admin account found: created default admin 'admin' / 'admin123'.");
+            // Set ADMIN_PASSWORD on Render so the public server never uses the well-known default.
+            String password = System.getenv().getOrDefault("ADMIN_PASSWORD", "admin123");
+            users.register("admin", password, Role.ADMIN);
+            log("No admin account found: created admin account 'admin'"
+                    + (System.getenv("ADMIN_PASSWORD") == null ? " with the DEFAULT password 'admin123' - change it!" : "."));
         }
     }
 
     public void stop() {
         running = false;
         try {
-            if (serverSocket != null) {
-                serverSocket.close();
+            if (webSocketServer != null) {
+                webSocketServer.stop(1000);
             }
-        } catch (IOException ignored) {
-            // shutting down anyway
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
         online.values().forEach(ClientHandler::close);
         pool.shutdownNow();
@@ -159,8 +230,6 @@ public class ChatServer {
             if (e.getCause() != null) {
                 System.err.println("Cause: " + e.getCause().getMessage());
             }
-        } catch (IOException e) {
-            System.err.println("Could not start server (is port " + PORT + " already in use?): " + e.getMessage());
         }
     }
 }
