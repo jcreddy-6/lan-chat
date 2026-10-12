@@ -1,17 +1,26 @@
-# Render has no native Java runtime, so the server runs from this Docker image.
 FROM eclipse-temurin:25-jdk
 WORKDIR /app
 
-# Your own code and the SQLite driver that is already in lib/
+# Install Nginx and gettext-base for reverse proxying and web hosting
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends nginx gettext-base dos2unix && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy source code, libraries, templates, and web assets
 COPY src ./src
 COPY lib ./lib
+COPY public ./public
+COPY nginx.conf.template ./nginx.conf.template
+COPY entrypoint.sh ./entrypoint.sh
 
-# WebSocket library (and the logging API it needs), fetched from Maven Central at build time
-ADD https://repo1.maven.org/maven2/org/java-websocket/Java-WebSocket/1.5.7/Java-WebSocket-1.5.7.jar lib/
-ADD https://repo1.maven.org/maven2/org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar lib/
+# Ensure executable permissions and Unix line endings
+RUN dos2unix ./entrypoint.sh && chmod +x ./entrypoint.sh
 
-# Compile everything into out/
-RUN mkdir out && javac -cp "lib/*" -d out $(find src -name "*.java")
+# Compile Java sources and package the downloadable client JAR
+RUN mkdir -p out && \
+    javac -cp "lib/*" -d out $(find src -name "*.java") && \
+    jar cfe public/LANChatClient.jar com.lanchat.client.ClientApp -C out .
 
-# Render sets the PORT variable; the server reads it. Set DB_PATH=/data/lanchat.db if you attach a disk.
-CMD ["java", "-cp", "out:lib/*", "com.lanchat.server.ChatServer"]
+EXPOSE 10000 5000
+
+CMD ["./entrypoint.sh"]

@@ -42,7 +42,7 @@ public class LoginFrame extends JFrame {
     }
 
     private JPanel buildForm() {
-        urlField.setText("ws://localhost:5000");   // for a deployed server type e.g. wss://your-app.onrender.com
+        urlField.setText("wss://lanchat-live.onrender.com");   // default to live server
         userField.setPlaceholder("Your username");
         passField.setPlaceholder("Your password");
 
